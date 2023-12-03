@@ -13,6 +13,22 @@ class PhysicsComponent:
     def __init__(self, name: str, equations: dict) -> None:
         self.name = name
         self.equations = equations
+
+    
+    def generate_equations(self, variable_names):
+        A = []
+        b = []
+        for eqn in self.equations:
+            row = [0] * len(variable_names)
+            for name in eqn:
+                if name == "RHS":
+                    b.append(eqn["RHS"])
+                    continue
+                namespaced_name = self.name + "." + name
+                row[variable_names.index(namespaced_name)] = eqn[name]
+            A.append(row)
+        return A, b
+
     
 class PhysicsConnection:
 
@@ -24,8 +40,15 @@ class PhysicsConnection:
         self.flip_sign = flip_sign
 
 
-
-
+    def generate_equations(self, variable_names):
+        row = [0] * len(variable_names)
+        namespaced_name1 = self.component1.name + "." + self.name1
+        namespaced_name2 = self.component2.name + "." + self.name2
+        row[variable_names.index(namespaced_name1)] = 1
+        row[variable_names.index(namespaced_name2)] = -1
+        if self.flip_sign:
+            row[variable_names.index(namespaced_name2)] = 1
+        return row, 0
 
 
 
@@ -71,7 +94,7 @@ class PhysicsSystem:
 
         
         def create_linear_system(self): 
-            variables = []
+            variable_names = []
 
             for component in self.components:
                 for eqn in component.equations:
@@ -79,36 +102,24 @@ class PhysicsSystem:
                         if name == "RHS":
                             continue
                         namespaced_name = component.name + "." + name
-                        if namespaced_name not in variables:
-                            variables.append(namespaced_name)
+                        if namespaced_name not in variable_names:
+                            variable_names.append(namespaced_name)
 
             b = []
             A = []
 
             for component in self.components:
-                for eqn in component.equations:
-                    row = [0] * len(variables)
-                    for name in eqn:
-                        if name == "RHS":
-                            b.append(eqn["RHS"])
-                            continue
-                        namespaced_name = component.name + "." + name
-                        row[variables.index(namespaced_name)] = eqn[name]
-                    A.append(row)
+                component_A, component_b = component.generate_equations(variable_names)
+                A += component_A
+                b += component_b
 
             for connection in self.connections:
-                row = [0] * len(variables)
-                namespaced_name1 = connection.component1.name + "." + connection.name1
-                namespaced_name2 = connection.component2.name + "." + connection.name2
-                row[variables.index(namespaced_name1)] = 1
-                row[variables.index(namespaced_name2)] = -1
-                if connection.flip_sign:
-                    row[variables.index(namespaced_name2)] = 1
+                row, rhs = connection.generate_equations(variable_names)
                 A.append(row)
-                b.append(0)
+                b.append(rhs)
             
             
-            return A, b, variables
+            return A, b, variable_names
         
 
         def numeric_linear_system(self, A, b, state):
