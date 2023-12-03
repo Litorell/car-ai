@@ -1,11 +1,21 @@
 
 
 import numpy as np
-from scipy.linalg import solve
+from scipy.linalg import solve, lstsq
 from scipy.sparse.linalg import spsolve
 from time import perf_counter as timer
 
 
+def dict_eqn_to_list(self, eqn: dict, variable_names: list):
+    row = [0] * len(variable_names)
+    rhs = 0
+    for name in eqn:
+        if name == "RHS":
+            rhs = eqn["RHS"]
+            continue
+        namespaced_name = self.name + "." + name
+        row[variable_names.index(namespaced_name)] = eqn[name]
+    return row, rhs
 
 
 class PhysicsComponent:
@@ -19,28 +29,42 @@ class PhysicsComponent:
         A = []
         b = []
         for eqn in self.equations:
-            row = [0] * len(variable_names)
-            for name in eqn:
-                if name == "RHS":
-                    b.append(eqn["RHS"])
-                    continue
-                namespaced_name = self.name + "." + name
-                row[variable_names.index(namespaced_name)] = eqn[name]
+            row, rhs = dict_eqn_to_list(self, eqn, variable_names)
             A.append(row)
+            b.append(rhs)
         return A, b
 
     
 class PhysicsConnection:
 
-    def __init__(self, component1, component2, name1, name2, flip_sign=False) -> None:
+    def __init__(
+            self, 
+            component1: PhysicsComponent, 
+            component2: PhysicsComponent, 
+            name1: str, 
+            name2: str, 
+            flip_sign: bool = False,
+            validation_function: callable = None,
+            fallback_equation: dict = None,
+            ) -> None:
+        
         self.component1 = component1
         self.component2 = component2
         self.name1 = name1
         self.name2 = name2
         self.flip_sign = flip_sign
+        self.equation = [
+            {
+                name1: 1,
+                name2: -1 if not flip_sign else 1,
+                "RHS": 0,
+            }
+        ]
+        self.validation_function = validation_function
+        self.fallback_equation = fallback_equation
 
 
-    def generate_equations(self, variable_names):
+    def generate_equation(self, variable_names):
         row = [0] * len(variable_names)
         namespaced_name1 = self.component1.name + "." + self.name1
         namespaced_name2 = self.component2.name + "." + self.name2
@@ -49,14 +73,27 @@ class PhysicsConnection:
         if self.flip_sign:
             row[variable_names.index(namespaced_name2)] = 1
         return row, 0
+        
+    
+    def validate(self, state):
+        if self.validation_function is not None:
+            return self.validation_function(state)
+        return True
 
+
+    def get_fallback_equation(self, state):
+        if self.fallback_equation is not None:
+            return self.fallback_equation(state)
+        return None
 
 
 class PhysicsSystem:
     
+
         def __init__(self) -> None:
             self.components = []
             self.connections = []
+            self.extra_equations = []
 
         def add_component(self, component: PhysicsComponent):
             self.components.append(component)
@@ -64,6 +101,8 @@ class PhysicsSystem:
         def add_connection(self, connection: PhysicsConnection):
             self.connections.append(connection)
 
+        def add_equation(self, equation: dict):
+            self.extra_equations.append(equation)
         
         def create_solid_connection(
                 self,
@@ -92,6 +131,41 @@ class PhysicsSystem:
             self.add_connection(torque_connection)
 
 
+        def create_slip_connection(
+                self,
+                component1: PhysicsComponent,
+                component2: PhysicsComponent,
+                name1: str,
+                name2: str,
+                slip_condition: callable,
+                slip_force: callable,
+            ):
+
+            acc_connection = PhysicsConnection(
+                component1,
+                component2,
+                f"{name1}.acc",
+                f"{name2}.acc",
+            )
+
+            torque_connection = PhysicsConnection(
+                component1,
+                component2,
+                f"{name1}.force",
+                f"{name2}.force",
+                flip_sign=True
+            )
+
+            slip_connection = PhysicsConnection(
+                component1,
+                component2,
+                f"{name1}.force",
+                f"{name2}.force",
+                flip_sign=True
+            )
+
+
+
         
         def create_linear_system(self): 
             variable_names = []
@@ -105,6 +179,13 @@ class PhysicsSystem:
                         if namespaced_name not in variable_names:
                             variable_names.append(namespaced_name)
 
+            for eqn in self.extra_equations:
+                for name in eqn:
+                    if name == "RHS":
+                        continue
+                    if name not in variable_names:
+                        variable_names.append(name)
+
             b = []
             A = []
 
@@ -114,7 +195,12 @@ class PhysicsSystem:
                 b += component_b
 
             for connection in self.connections:
-                row, rhs = connection.generate_equations(variable_names)
+                row, rhs = connection.generate_equation(variable_names)
+                A.append(row)
+                b.append(rhs)
+            
+            for eqn in self.extra_equations:
+                row, rhs = dict_eqn_to_list(self, eqn, variable_names)
                 A.append(row)
                 b.append(rhs)
             
@@ -151,281 +237,4 @@ class PhysicsSystem:
 
         #     # Validate the solution
                         
-
-
-# Example usage
-
-# Car
-mass = 1500
-wheel_base = 2
-width = 1.5
-
-# Motor
-motor_inertia = 0.1
-
-# Wheel
-wheel_radius = 0.3
-wheel_inertia = 0.1
-wheel_fl_pos = np.array([wheel_base/2, width/2])
-wheel_fr_pos = np.array([wheel_base/2, -width/2])
-wheel_rl_pos = np.array([-wheel_base/2, width/2])
-wheel_rr_pos = np.array([-wheel_base/2, -width/2])
-
-
-system = PhysicsSystem()
-
-
-motor = PhysicsComponent(
-    "motor",
-    [
-        {
-            "input.force": 1,
-            "RHS": lambda state: state["motor_torque"],
-        },
-        {
-            "input.force": 1,
-            "shaft_out.force": 1,
-            "shaft_out.acc": -motor_inertia,
-            "RHS": 0,
-        }
-    ]
-)
-
-gearbox = PhysicsComponent(
-    "gearbox",
-    [
-        {
-            "shaft_out.force": 1,
-            "shaft_in.force": lambda state: state["gear_ratio"],
-            "RHS": 0,
-        },
-        {
-            "shaft_in.acc": 1,
-            "shaft_out.acc": lambda state: -state["gear_ratio"],
-            "RHS": 0,
-        }
-    ]
-)
-
-differential = PhysicsComponent(
-    "differential",
-    [
-        { # Equal torque to both wheels
-            "shaft_right.force": 1,
-            "shaft_left.force": -1,
-            "RHS": 0,
-        },
-        { # Torque conservation
-            "shaft_in.force": 1,
-            "shaft_left.force": 1,
-            "shaft_right.force": 1,
-            "RHS": 0,
-        },
-        {
-            "shaft_in.acc": 2,
-            "shaft_left.acc": -1,
-            "shaft_right.acc": -1,
-            "RHS": 0,
-        }
-    ]
-)
-
-wheel_fl = PhysicsComponent(
-    "wheel_fl",
-    [
-        {
-            "brakes.force": 1,
-            "RHS": lambda state: -state["fl_braking"],
-        },
-        {
-            # "brakes.force": lambda state: np.cos(state["steering_angle"]),
-            "brakes.force": 1,
-            "contact_point.force": wheel_radius,
-            "shaft_in.acc": -wheel_inertia,
-            "RHS": 0,
-        },
-        {
-            "contact_point.acc": 1,
-            "shaft_in.acc": -wheel_radius,
-            "RHS": 0,
-        }
-    ]
-)
-
-
-wheel_fr = PhysicsComponent(
-    "wheel_fr",
-    [
-        {
-            "brakes.force": 1,
-            "RHS": lambda state: -state["fr_braking"],
-        },
-        {
-            # "brakes.force": lambda state: np.cos(state["steering_angle"]),
-            "brakes.force": 1,
-            "contact_point.force": wheel_radius,
-            "shaft_in.acc": -wheel_inertia,
-            "RHS": 0,
-        },
-        {
-            "contact_point.acc": 1,
-            "shaft_in.acc": -wheel_radius,
-            "RHS": 0,
-        }
-    ]
-)
-
-
-
-
-wheel_rl = PhysicsComponent(
-    "wheel_rl",
-    [
-        {
-            "brakes.force": 1,
-            "RHS": lambda state: -state["rl_braking"],
-        },
-        {
-            "shaft_in.force": 1,
-            "brakes.force": 1,
-            "contact_point.force": wheel_radius,
-            "shaft_in.acc": -wheel_inertia,
-            "RHS": 0,
-        },
-        {
-            "contact_point.acc": 1,
-            "shaft_in.acc": -wheel_radius,
-            "RHS": 0,
-        }
-    ]
-)
-
-wheel_rr = PhysicsComponent(
-    "wheel_rr",
-    [
-        {
-            "brakes.force": 1,
-            "RHS": lambda state: -state["rr_braking"],
-        },
-        {
-            "shaft_in.force": 1,
-            "brakes.force": 1,
-            "contact_point.force": wheel_radius,
-            "shaft_in.acc": -wheel_inertia,
-            "RHS": 0,
-        },
-        {
-            "contact_point.acc": 1,
-            "shaft_in.acc": -wheel_radius,
-            "RHS": 0,
-        }
-    ]
-)
-
-
-car = PhysicsComponent(
-    "car",
-    [
-        { # X direction (longitudinal)
-            "contact_point_fl.force": 1,
-            "contact_point_fr.force": 1,
-            "contact_point_rl.force": 1,
-            "contact_point_rr.force": 1,
-            "body.acc": -mass,
-            "RHS": 0,
-        },
-        {
-            "contact_point_rl.acc": 1,
-            "body.acc": -1,
-            "RHS": 0, # TODO: calculate based on wheel position (sin, cos, state etc).
-        },
-        {
-            "contact_point_rr.acc": 1,
-            "body.acc": -1,
-            "RHS": 0,
-        },
-        {
-            "contact_point_fl.acc": 1,
-            "body.acc": -1,
-            "RHS": 0,
-        },
-        {
-            "contact_point_fr.acc": 1,
-            "body.acc": -1,
-            "RHS": 0,
-        },
-        # # Y direction (lateral)
-        # {
-        #     # TODO: Add lateral inertia
-        # },
-        # # Yaw
-        # {
-        #     # TODO: Add yaw inertia
-        # }
-    ]
-)
-
-system.add_component(motor)
-system.add_component(gearbox)
-system.add_component(differential)
-system.add_component(wheel_fl)
-system.add_component(wheel_fr)
-system.add_component(wheel_rl)
-system.add_component(wheel_rr)
-system.add_component(car)
-
-
-system.create_solid_connection(motor, gearbox, "shaft_out", "shaft_in")
-system.create_solid_connection(gearbox, differential, "shaft_out", "shaft_in")
-system.create_solid_connection(differential, wheel_rl, "shaft_left", "shaft_in")
-system.create_solid_connection(differential, wheel_rr, "shaft_right", "shaft_in")
-system.create_solid_connection(wheel_fl, car, "contact_point", "contact_point_fl")
-system.create_solid_connection(wheel_fr, car, "contact_point", "contact_point_fr")
-system.create_solid_connection(wheel_rl, car, "contact_point", "contact_point_rl")
-system.create_solid_connection(wheel_rr, car, "contact_point", "contact_point_rr")
-# system.create_solid_connection(wheel_fl, car, "contact_point_y", "contact_point_fl_y")
-# system.create_solid_connection(wheel_fr, car, "contact_point_y", "contact_point_fr_y")
-# system.create_solid_connection(wheel_rl, car, "contact_point_y", "contact_point_rl_y")
-# system.create_solid_connection(wheel_rr, car, "contact_point_y", "contact_point_rr_y")
-
-
-state = {
-    "motor_torque": 400,
-    "gear_ratio": 10,
-    "fl_braking": 0,
-    "fr_braking": 0,
-    "rl_braking": 0,
-    "rr_braking": 0,
-}
-
-# t0 = timer()
-# t1 = timer()
-# print("Time:", 1e3*(t1 - t0), "ms")
-
-sym_A, sym_b, variables = system.create_linear_system()
-A, b = system.numeric_linear_system(sym_A, sym_b, state)
-
-x = solve(A, b)
-
-
-all_variables = dict(zip(variables, x))
-for name in all_variables:
-    print(name, all_variables[name])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
