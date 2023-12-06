@@ -9,6 +9,7 @@ from physics import *
 mass = 1500
 wheel_base = 2
 width = 1.5
+moment_of_inertia = 1000
 
 # Motor
 motor_inertia = 0.1
@@ -82,23 +83,32 @@ wheel_fl = PhysicsComponent(
             "RHS": lambda state: -state["fl_braking"],
         },
         { # Balance torques
-            # "brakes.force": lambda state: np.cos(state["steering_angle"]),
             "brakes.force": 1,
-            "contact_point.force": -wheel_radius,
+            "contact_point_x.force": -wheel_radius,
             "shaft_in.acc": -wheel_inertia,
         },
         { # Shaft rotation acceleration
-            "hub.acc": 1,
-            "contact_point.acc": -1,
+            "hub_x.acc": 1,
+            "contact_point_x.acc": -1,
             "shaft_in.acc": -wheel_radius,
         },
-        { # Balance forces
-            "hub.force": 1,
-            "contact_point.force": 1,
+        {
+            "hub_y.acc": 1,
+            "contact_point_y.acc": -1,
         },
-        # TODO: Create slip equation
+        { # Balance forces
+            "hub_x.force": 1,
+            "contact_point_x.force": 1,
+        },
+        {
+            "hub_y.force": 1,
+            "contact_point_y.force": 1,
+        },
         { # No slip
-            "contact_point.acc": 1,
+            "contact_point_x.acc": 1,
+        },
+        {
+            "contact_point_y.acc": 1,
         }
     ]
 )
@@ -110,23 +120,33 @@ wheel_fr = PhysicsComponent(
             "brakes.force": 1,
             "RHS": lambda state: -state["fr_braking"],
         },
-        {
-            # "brakes.force": lambda state: np.cos(state["steering_angle"]),
+        { # Balance torques
             "brakes.force": 1,
-            "contact_point.force": -wheel_radius,
+            "contact_point_x.force": -wheel_radius,
             "shaft_in.acc": -wheel_inertia,
         },
-        {
-            "hub.acc": 1,
-            "contact_point.acc": -1,
+        { # Shaft rotation acceleration
+            "hub_x.acc": 1,
+            "contact_point_x.acc": -1,
             "shaft_in.acc": -wheel_radius,
         },
         {
-            "hub.force": 1,
-            "contact_point.force": 1,
+            "hub_y.acc": 1,
+            "contact_point_y.acc": -1,
+        },
+        { # Balance forces
+            "hub_x.force": 1,
+            "contact_point_x.force": 1,
         },
         {
-            "contact_point.acc": 1,
+            "hub_y.force": 1,
+            "contact_point_y.force": 1,
+        },
+        { # No slip
+            "contact_point_x.acc": 1,
+        },
+        {
+            "contact_point_y.acc": 1,
         }
     ]
 )
@@ -134,27 +154,38 @@ wheel_fr = PhysicsComponent(
 wheel_rl = PhysicsComponent(
     "wheel_rl",
     [
-        {
+        { # Brake force
             "brakes.force": 1,
             "RHS": lambda state: -state["rl_braking"],
         },
-        {
+        { # Balance torques
             "shaft_in.force": 1,
             "brakes.force": 1,
-            "contact_point.force": -wheel_radius,
+            "contact_point_x.force": -wheel_radius,
             "shaft_in.acc": -wheel_inertia,
         },
-        {
-            "hub.acc": 1,
-            "contact_point.acc": -1,
+        { # Shaft rotation acceleration
+            "hub_x.acc": 1,
+            "contact_point_x.acc": -1,
             "shaft_in.acc": -wheel_radius,
         },
         {
-            "hub.force": 1,
-            "contact_point.force": 1,
+            "hub_y.acc": 1,
+            "contact_point_y.acc": -1,
+        },
+        { # Balance forces
+            "hub_x.force": 1,
+            "contact_point_x.force": 1,
         },
         {
-            "contact_point.acc": 1,
+            "hub_y.force": 1,
+            "contact_point_y.force": 1,
+        },
+        { # No slip
+            "contact_point_x.acc": 1,
+        },
+        {
+            "contact_point_y.acc": 1,
         }
     ]
 )
@@ -177,20 +208,24 @@ wheel_rr = PhysicsComponent(
             "contact_point_x.acc": -1,
             "shaft_in.acc": -wheel_radius,
         },
+        {
+            "hub_y.acc": 1,
+            "contact_point_y.acc": -1,
+        },
         { # Balance forces
             "hub_x.force": 1,
             "contact_point_x.force": 1,
         },
-        # { # Balance forces
-        #     "hub_y.force": 1,
-        #     "contact_point_y.force": 1,
-        # },
+        {
+            "hub_y.force": 1,
+            "contact_point_y.force": 1,
+        },
         { # No slip
             "contact_point_x.acc": 1,
         },
-        # {
-        #     "contact_point_y.acc": 1,
-        # }
+        {
+            "contact_point_y.acc": 1,
+        }
     ]
 )
 
@@ -198,43 +233,88 @@ body = PhysicsComponent(
     "body",
     [
         { # X direction (longitudinal)
-            "wheel_fl.force": 1,
-            "wheel_fr.force": 1,
-            "wheel_rl.force": 1,
-            "wheel_rr.force": 1,
-            "cg.acc": -mass,
+            "wheel_fl_x.force": 1,
+            "wheel_fr_x.force": 1,
+            "wheel_rl_x.force": 1,
+            "wheel_rr_x.force": 1,
+            "cg_x.acc": -mass,
             "RHS": 0,
         },
         {
-            "wheel_rl.acc": 1,
-            "cg.acc": -1,
-            "RHS": 0, # TODO: calculate based on wheel position (sin, cos, state etc).
+            "wheel_rl_x.acc": 1,
+            "cg_x.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_rl_pos[0],
         },
         {
-            "wheel_rr.acc": 1,
-            "cg.acc": -1,
+            "wheel_rr_x.acc": 1,
+            "cg_x.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_rr_pos[0],
+        },
+        {
+            "wheel_fl_x.acc": 1,
+            "cg_x.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_fl_pos[0],
+        },
+        {
+            "wheel_fr_x.acc": 1,
+            "cg_x.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_fr_pos[0],
+        },
+        # Y direction (lateral)
+        {
+            "wheel_fl_y.force": 1,
+            "wheel_fr_y.force": 1,
+            "wheel_rl_y.force": 1,
+            "wheel_rr_y.force": 1,
+            "cg_y.acc": -mass,
             "RHS": 0,
         },
         {
-            "wheel_fl.acc": 1,
-            "cg.acc": -1,
-            "RHS": 0,
+            "wheel_rl_y.acc": 1,
+            "cg_y.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_rl_pos[1],
         },
         {
-            "wheel_fr.acc": 1,
-            "cg.acc": -1,
-            "RHS": 0,
+            "wheel_rr_y.acc": 1,
+            "cg_y.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_rr_pos[1],
         },
-        # # Y direction (lateral)
-        # {
-        #     # TODO: Add lateral inertia
-        # },
-        # # Yaw
-        # {
-        #     # TODO: Add yaw inertia
-        # }
+        {
+            "wheel_fl_y.acc": 1,
+            "cg_y.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_fl_pos[1],
+        },
+        {
+            "wheel_fr_y.acc": 1,
+            "cg_y.acc": -1,
+            "RHS": lambda state: state["yaw_rate"] ** 2 * wheel_fr_pos[1],
+        },
+        # Yaw
+        {
+            "wheel_fl_x.force": wheel_fl_pos[1],
+            "wheel_fr_x.force": wheel_fr_pos[1],
+            "wheel_rl_x.force": wheel_rl_pos[1],
+            "wheel_rr_x.force": wheel_rr_pos[1],
+            "wheel_fl_y.force": wheel_fl_pos[0],
+            "wheel_fr_y.force": wheel_fr_pos[0],
+            "wheel_rl_y.force": wheel_rl_pos[0],
+            "wheel_rr_y.force": wheel_rr_pos[0],
+            "yaw.acc": -moment_of_inertia,
+        }
     ]
 )
+
+# Same frictional loading
+extra_equations = [
+    {
+        "wheel_fl.contact_point_y.force": 1,
+        "wheel_fr.contact_point_y.force": -1,
+    },
+    {
+        "wheel_rl.contact_point_y.force": 1,
+        "wheel_rr.contact_point_y.force": -1,
+    }
+]
 
 
 
@@ -252,10 +332,17 @@ system.create_solid_connection(motor, gearbox, "shaft_out", "shaft_in")
 system.create_solid_connection(gearbox, differential, "shaft_out", "shaft_in")
 system.create_solid_connection(differential, wheel_rl, "shaft_left", "shaft_in")
 system.create_solid_connection(differential, wheel_rr, "shaft_right", "shaft_in")
-system.create_solid_connection(wheel_fl, body, "hub", "wheel_fl")
-system.create_solid_connection(wheel_fr, body, "hub", "wheel_fr")
-system.create_solid_connection(wheel_rl, body, "hub", "wheel_rl")
-system.create_solid_connection(wheel_rr, body, "hub_x", "wheel_rr")
+system.create_solid_connection(wheel_fl, body, "hub_x", "wheel_fl_x")
+system.create_solid_connection(wheel_fr, body, "hub_x", "wheel_fr_x")
+system.create_solid_connection(wheel_rl, body, "hub_x", "wheel_rl_x")
+system.create_solid_connection(wheel_rr, body, "hub_x", "wheel_rr_x")
+system.create_solid_connection(wheel_fl, body, "hub_y", "wheel_fl_y")
+system.create_solid_connection(wheel_fr, body, "hub_y", "wheel_fr_y")
+system.create_solid_connection(wheel_rl, body, "hub_y", "wheel_rl_y")
+system.create_solid_connection(wheel_rr, body, "hub_y", "wheel_rr_y")
+
+system.add_equation(extra_equations[0])
+system.add_equation(extra_equations[1])
 
 
 # system.create_solid_connection(wheel_fl, car, "contact_point_y", "contact_point_fl_y")
@@ -271,6 +358,7 @@ state = {
     "fr_braking": 0,
     "rl_braking": 0,
     "rr_braking": 0,
+    "yaw_rate": 0,
 }
 
 # t0 = timer()
@@ -280,13 +368,21 @@ state = {
 sym_A, sym_b, variables = system.create_linear_system()
 A, b = system.numeric_linear_system(sym_A, sym_b, state)
 
-x = solve(A, b)
-# x = lstsq(A, b)[0]
+
+import scipy
+v = np.array(variables).reshape(-1,1)
+ns = scipy.linalg.null_space(A)
+print("\n".join(["\t".join(l) for l in np.hstack([v,np.round(ns*100).astype(int)])]))
+
+# x = solve(A, b)
+x = lstsq(A, b)[0]
+
+print(A @ x - b)
 
 
 all_variables = dict(zip(variables, x))
 for name in all_variables:
-    print(name, all_variables[name])
+    print(name, round(all_variables[name], 2))
 
 
 

@@ -6,14 +6,17 @@ from scipy.sparse.linalg import spsolve
 from time import perf_counter as timer
 
 
-def dict_eqn_to_list(self, eqn: dict, variable_names: list):
+def dict_eqn_to_list(eqn: dict, variable_names: list, component_name: str = None):
     row = [0] * len(variable_names)
     rhs = 0
     for name in eqn:
         if name == "RHS":
             rhs = eqn["RHS"]
             continue
-        namespaced_name = self.name + "." + name
+        if component_name is not None:
+            namespaced_name = component_name + "." + name
+        else:
+            namespaced_name = name
         row[variable_names.index(namespaced_name)] = eqn[name]
     return row, rhs
 
@@ -29,7 +32,7 @@ class PhysicsComponent:
         A = []
         b = []
         for eqn in self.equations:
-            row, rhs = dict_eqn_to_list(self, eqn, variable_names)
+            row, rhs = dict_eqn_to_list(eqn, variable_names, self.name)
             A.append(row)
             b.append(rhs)
         return A, b
@@ -164,8 +167,6 @@ class PhysicsSystem:
                 flip_sign=True
             )
 
-
-
         
         def create_linear_system(self): 
             variable_names = []
@@ -200,7 +201,7 @@ class PhysicsSystem:
                 b.append(rhs)
             
             for eqn in self.extra_equations:
-                row, rhs = dict_eqn_to_list(self, eqn, variable_names)
+                row, rhs = dict_eqn_to_list(eqn, variable_names)
                 A.append(row)
                 b.append(rhs)
             
