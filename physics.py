@@ -1,9 +1,10 @@
 
 
 import numpy as np
-from scipy.linalg import solve, lstsq
+from scipy.linalg import solve, lstsq, null_space
 from scipy.sparse.linalg import spsolve
 from time import perf_counter as timer
+
 
 
 def dict_eqn_to_list(eqn: dict, variable_names: list, component_name: str = None):
@@ -19,6 +20,14 @@ def dict_eqn_to_list(eqn: dict, variable_names: list, component_name: str = None
             namespaced_name = name
         row[variable_names.index(namespaced_name)] = eqn[name]
     return row, rhs
+
+
+def print_null_space(A, variable_names):
+    v = np.array(variable_names).reshape(-1,1)
+    ns = null_space(A)
+    print("\n".join(["\t".join(l) for l in np.hstack([v,np.round(ns*100).astype(int)])]))
+
+
 
 
 class PhysicsComponent:
