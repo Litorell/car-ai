@@ -44,7 +44,8 @@ def calculate_slip_force(slip_vel):
     if slip_norm == 0:
         return np.array([0,0])
     slip_direction = slip_vel / slip_norm
-    return -slip_direction * mu * normal_force
+    force_magnitude = (1 - np.exp(-slip_norm)) * mu * normal_force
+    return -slip_direction * force_magnitude
 
 def calculate_motor_rpm(input_variables, state_defining):
     rl_rpm = state_defining["wheel_rl.shaft_in.vel"] / (2*np.pi) * 60
@@ -379,15 +380,6 @@ system.create_solid_connection(wheel_rl, body, "hub_y", "wheel_rl_y")
 system.create_solid_connection(wheel_rr, body, "hub_y", "wheel_rr_y")
 
 
-
-# Variables that control the system
-input_variables = {
-    "steering_angle": 0,
-    "throttle": 1,
-    "brake": 0,
-    "gear": 1,
-}
-
 # Defining variables of the system. These are the variables that are solved for
 # and updated every timestep.
 state_defining = {
@@ -397,16 +389,11 @@ state_defining = {
     "body.cg_y.vel": 0,
     "body.yaw.pos": 0,
     "body.yaw.vel": 0,
-    "wheel_fl.shaft_in.vel": 1,
-    "wheel_fr.shaft_in.vel": 1,
-    "wheel_rl.shaft_in.vel": 1,
-    "wheel_rr.shaft_in.vel": 1,
-    # "wheel_fl.shaft_in.pos": 0,
-    # "wheel_fr.shaft_in.pos": 0,
-    # "wheel_rl.shaft_in.pos": 0,
-    # "wheel_rr.shaft_in.pos": 0,
+    "wheel_fl.shaft_in.vel": 0,
+    "wheel_fr.shaft_in.vel": 0,
+    "wheel_rl.shaft_in.vel": 0,
+    "wheel_rr.shaft_in.vel": 0,
 }
-
 
 state_computed = {
     # Friction from slip
@@ -426,79 +413,117 @@ state_computed = {
     "rl_braking": 0,
     "rr_braking": 0,
     # Gear ratio based on gear
-    "gear_ratio": 10,
+    "gear_ratio": 0,
 }
 
+sym_A, sym_b, variables = system.create_linear_system()
 def rotate90(vec):
     return np.array([-vec[1], vec[0]])
 
-for quadrant in ["fl", "fr", "rl", "rr"]:
-    wheel_name = f"wheel_{quadrant}"
-    body_v_x = state_defining["body.cg_x.vel"]
-    body_v_y = state_defining["body.cg_y.vel"]
-    body_vel = np.array([body_v_x, body_v_y])
-    wheel_local_pos_x = wheel_positions[f"wheel_{quadrant}_x"]
-    wheel_local_pos_y = wheel_positions[f"wheel_{quadrant}_y"]
-    wheel_local_pos = np.array([wheel_local_pos_x, wheel_local_pos_y])
-    yaw_rate = state_defining["body.yaw.vel"]
-    wheel_vel = body_vel + yaw_rate * rotate90(wheel_local_pos)
-    rot_speed = state_defining[f"wheel_{quadrant}.shaft_in.vel"]
 
-    steering_angle = 0
-    if quadrant in ["fl", "fr"]:
-        steering_angle = input_variables["steering_angle"]
+for t in range(10000):
+
+    # Variables that control the system
+    input_variables = {
+        "steering_angle": 0,
+        "throttle": 0.4,
+        "brake": 0,
+        "gear": 1,
+    }
+
+    state_computed["gear_ratio"] = gear_ratios[input_variables["gear"] - 1]
+
+    rpm = calculate_motor_rpm(input_variables, state_defining)
+    state_computed["motor_torque"] = motor_torque_curve(input_variables["throttle"], rpm)
+
+
+
+    for quadrant in ["fl", "fr", "rl", "rr"]:
+        wheel_name = f"wheel_{quadrant}"
+        body_v_x = state_defining["body.cg_x.vel"]
+        body_v_y = state_defining["body.cg_y.vel"]
+        body_vel = np.array([body_v_x, body_v_y])
+        wheel_local_pos_x = wheel_positions[f"wheel_{quadrant}_x"]
+        wheel_local_pos_y = wheel_positions[f"wheel_{quadrant}_y"]
+        wheel_local_pos = np.array([wheel_local_pos_x, wheel_local_pos_y])
+        yaw_rate = state_defining["body.yaw.vel"]
+        wheel_vel = body_vel + yaw_rate * rotate90(wheel_local_pos)
+        rot_speed = state_defining[f"wheel_{quadrant}.shaft_in.vel"]
+
+        steering_angle = 0
+        if quadrant in ["fl", "fr"]:
+            steering_angle = input_variables["steering_angle"]
+        
+        rot_mat = np.array([
+            [np.cos(steering_angle), np.sin(steering_angle)],
+            [-np.sin(steering_angle), np.cos(steering_angle)]
+        ])
+        slip_vel = wheel_vel - rot_mat @ np.array([1,0]) * rot_speed * wheel_radius
+
+        force = calculate_slip_force(slip_vel)
+        state_computed[f"{wheel_name}_x.force"] = force[0]
+        state_computed[f"{wheel_name}_y.force"] = force[1]
+
+        braking_torque = -input_variables["brake"] * max_braking_torque * np.sign(rot_speed)
+        state_computed[f"{quadrant}_braking"] = braking_torque
+
+    state = {**input_variables, **state_defining, **state_computed}
+
+
+    A, b = system.numeric_linear_system(sym_A, sym_b, state)
+
+    # t0 = timer()
+    # t1 = timer()
+    # print("Time:", round(1e3*(t1 - t0),2), "ms")
+
+
+    x = solve(A, b)
+    # x = lstsq(A, b)[0]
+
+
+    # all_variables = dict(zip(variables, x))
+    # for name in all_variables:
+    #     print(name, round(all_variables[name], 2))
+
+    # print("Changes:")
     
-    rot_mat = np.array([
-        [np.cos(steering_angle), np.sin(steering_angle)],
-        [-np.sin(steering_angle), np.cos(steering_angle)]
+    # Update state
+    dt = 0.001
+    
+    defining_vars = [n[:-4] for n in state_defining if n.endswith(".vel")]
+    for name in defining_vars:
+        # TODO: This uses Euler forward, leads to instability for the lighter
+        # front wheels. Possible solutions:
+        # - Use a more stable integration method (e.g. Runge-Kutta, Leapfrog)
+        # - Linearize everything and use a linear solver
+        # - Do an ad hoc fix by checking if the slip for the front wheels 
+        #   changes direction. (Cheap, but might work well enough)
+
+
+
+        state_defining[name + ".vel"] += x[variables.index(name + ".acc")]*dt
+        print(name + ".vel", round(state_defining[name + ".vel"], 2))
+    
+    d_pos_local = np.array([
+        state_defining["body.cg_x.vel"]*dt,
+        state_defining["body.cg_y.vel"]*dt,
     ])
-    slip_vel = wheel_vel - rot_mat @ np.array([1,0]) * rot_speed * wheel_radius
 
-    force = calculate_slip_force(slip_vel)
-    state_computed[f"{wheel_name}_x.force"] = force[0]
-    state_computed[f"{wheel_name}_y.force"] = force[1]
+    yaw = state_defining["body.yaw.pos"]
+    yaw_rot_mat = np.array([
+        [np.cos(yaw), -np.sin(yaw)],
+        [np.sin(yaw), np.cos(yaw)]
+    ])
+    d_pos_global = yaw_rot_mat @ d_pos_local
+    state_defining["body.cg_x.pos"] += d_pos_global[0]
+    state_defining["body.cg_y.pos"] += d_pos_global[1]
+    
+    state_defining["body.yaw.pos"] += state_defining["body.yaw.vel"] * dt
 
-    braking_torque = -input_variables["brake"] * max_braking_torque * np.sign(rot_speed)
-    state_computed[f"{quadrant}_braking"] = braking_torque
+    # print("")
 
-
-rpm = calculate_motor_rpm(input_variables, state_defining)
-state_computed["motor_torque"] = motor_torque_curve(input_variables["throttle"], rpm)
-
-state_computed["gear_ratio"] = gear_ratios[input_variables["gear"] - 1]
-
-
-state = {**input_variables, **state_defining, **state_computed}
-
-# t0 = timer()
-# t1 = timer()
-# print("Time:", 1e3*(t1 - t0), "ms")
-
-sym_A, sym_b, variables = system.create_linear_system()
-A, b = system.numeric_linear_system(sym_A, sym_b, state)
-
-
-# x = solve(A, b)
-x = lstsq(A, b)[0]
-
-# print(A @ x - b)
-
-
-# all_variables = dict(zip(variables, x))
-# for name in all_variables:
-#     print(name, round(all_variables[name], 2))
-
-print("Changes:")
-dt = 0.01
-defining_vars = [n[:-4] for n in state_defining if n.endswith(".vel")]
 for name in defining_vars:
-    print(name + ".vel", round(x[variables.index(name + ".acc")]*dt, 4))
-
-
-
-
-
-
+    print(name + ".vel", round(state_defining[name + ".vel"], 2))
 
 
 
